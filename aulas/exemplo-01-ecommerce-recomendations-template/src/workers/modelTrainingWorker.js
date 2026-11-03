@@ -3,7 +3,7 @@ import { workerEvents } from "../events/constants.js";
 
 console.log("Model training worker initialized");
 let _globalCtx = {};
-let _model = {};
+let _model = null;
 
 const WEIGHTS = {
   category: 0.4,
@@ -112,16 +112,16 @@ function encodeUser(user, context) {
       .reshape([1, context.dimentions]);
   }
 
-  // return tf
-  //   .concat1d([
-  //     tf.zeros([1]), // preço é ignorado,
-  //     tf.tensor1d([
-  //       normalize(user.age, context.minAge, context.maxAge) * WEIGHTS.age,
-  //     ]),
-  //     tf.zeros([context.numCategories]), // categoria ignorada,
-  //     tf.zeros([context.numColors]), // color ignorada,
-  //   ])
-  //   .reshape([1, context.dimentions]);
+  return tf
+    .concat1d([
+      tf.zeros([1]), // preço é ignorado,
+      tf.tensor1d([
+        normalize(user.age, context.minAge, context.maxAge) * WEIGHTS.age,
+      ]),
+      tf.zeros([context.numCategories]), // categoria ignorada,
+      tf.zeros([context.numColors]), // color ignorada,
+    ])
+    .reshape([1, context.dimentions]);
 }
 
 function createTrainingData(context) {
@@ -200,6 +200,7 @@ async function configureNeuralNetAndTrain(trainData) {
       },
     },
   });
+  return model;
 }
 
 async function trainModel({ users }) {
@@ -233,12 +234,32 @@ async function trainModel({ users }) {
   postMessage({ type: workerEvents.trainingComplete });
 }
 function recommend(user, ctx) {
-  console.log("will recommend for user:", user);
-  // postMessage({
-  //     type: workerEvents.recommend,
-  //     user,
-  //     recommendations: []
-  // });
+  if (!_model) return;
+  const context = _globalCtx;
+  const userVector = encodeUser(user, context).dataSync();
+  const inputs = context.productVectors.map(({ vector }) => {
+    return [...userVector, ...vector];
+  });
+  const inputTensor = tf.tensor2d(inputs);
+  const predictions = _model.predict(inputTensor);
+
+  const scores = predictions.dataSync();
+
+  const recommendations = context.productVectors.map((item, index) => {
+    return {
+      ...item.meta,
+      name: item.name,
+      score: scores[index],
+    };
+  });
+
+  const sortedItems = recommendations.sort((a, b) => b.score - a.score);
+
+  postMessage({
+    type: workerEvents.recommend,
+    user,
+    recommendations: sortedItems,
+  });
 }
 
 const handlers = {
